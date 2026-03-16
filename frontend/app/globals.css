@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --background: #0f1117;
+  --card: #1a1d27;
+  --border: #2d3149;
+  --accent-blue: #60a5fa;
+  --accent-purple: #a78bfa;
+  --accent-orange: #fb923c;
+}
+
+body {
+  background: var(--background);
+  color: #e5e7eb;
+  font-family: var(--font-inter, Inter, system-ui, -apple-system, sans-serif);
+  min-height: 100vh;
+}
+
+a {
+  color: var(--accent-blue);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.pill-button {
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 8px 14px;
+  background: #121420;
+  color: #e5e7eb;
+}
