@@ -1,77 +1,54 @@
-# Financial Data ETL & Dashboard
+# Financial Data ETL, API & Frontend
 
-This project provides an end-to-end ETL pipeline and interactive dashboard for financial stock data using the `yfinance` API. 
-It loads, transforms, and stores historical market data in a PostgreSQL database, and visualizes selected metrics in a **Streamlit** dashboard.
+This project provides an end-to-end ETL pipeline, FastAPI backend, and a Next.js 14 dashboard for exploring and forecasting stock prices.
 
-# Tech Stack
-
-- **Python 3.10**
-- **PostgreSQL 15** (Dockerized)
-- **SQLAlchemy & Pandas** for ETL
-- **Streamlit** for dashboarding
-- **Plotly Express** for interactive charts
-- **Docker** + `docker-compose` for reproducible environments
-
----
-
-# Project Structure
+## Architecture
 
 ```
-dmlab/
-├── app/
-│   ├── etl_pipeline.py              # Runs the ETL and writes to the DB
-│   └── dashboard/
-│       └── streamlit.py             # Interactive Streamlit app
-├── src/
-│   ├── database.py                  # DB engine and metadata
-│   └── etl/
-│       ├── companies.py             # Company schema + yfinance metadata fetcher
-│       ├── daily_prices.py          # Price data fetcher
-│       └── metrics.py               # MA, RSI, MACD calculations
-├── docker/
-│   ├── Dockerfile                   # Python container setup
-│   └── docker-compose.yml           # PostgreSQL setup
-├── .env                             # DB environment config
-├── requirements.txt                 # Python dependencies
-└── README.md                        # Project instructions
-```
-# Environment Variables
-Make sure Docker and Docker Compose are installed on your system.
-
-# 1. Clone the project
-```
-git clone https://github.com/antalbalint97/dmlab
+yfinance → ETL → PostgreSQL → FastAPI → Next.js
 ```
 
-# 2. Start the container
-```
+## Quick start (Docker)
+
+Ensure `.env` is populated for PostgreSQL, then run:
+
+```bash
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-This will:
+Services:
+- `db` – PostgreSQL 15
+- `api` – FastAPI at `http://localhost:8000`
+- `frontend` – Next.js at `http://localhost:3000`
 
--Launch a PostgreSQL server inside a Docker container  
--Install all Python requirements  
+## API Endpoints
 
-# 3. Run the ETL process
+- `GET /api/tickers` → `[{ "ticker": "AAPL", "name": "Apple Inc." }, ...]`
+- `GET /api/prices/{ticker}?period=90` → OHLCV + indicators (`ma_20`, `ma_50`, `rsi_14`, `macd`)
+- `POST /api/forecast`  
+  Body: `{ "ticker": "AAPL", "days_ahead": 30, "model_type": "linear" | "random_forest" | "lstm" | "prophet" }`  
+  Response: `{ "forecast": [{ "date": "...", "predicted_close": 123.4 }], "r2_score": 0.9, "mae": 1.2 }`
+- `GET /api/forecast/{ticker}?model_type=linear` → Last cached forecast
+
+## Local development
+
+### Backend (FastAPI)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.api:app --reload --port 8000
 ```
+
+### Frontend (Next.js)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### ETL
+```bash
 python -m app.etl_pipeline
 ```
-This will:  
-  
--Run the ETL pipeline (.etl_pipeline.py)  
--Populate the database with:  
-    companies  
-    daily_prices  
-    daily_prices_adjusted  
-  
-You should see logs confirming table creations.  
-
-# 4. Launch the dashboard
-```
-streamlit run app/dashboard/streamlit.py
-```
-
-This will:
-
--Launch the dashboard on a local port, probably: http://localhost:8501
+Populates `companies`, `daily_prices`, and `daily_prices_adjusted` tables using yfinance.
