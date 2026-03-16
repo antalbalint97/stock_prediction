@@ -37,6 +37,7 @@ export default function ForecastChart({ history, forecast, loading }: Props) {
     forecast: forecastMap.get(date),
   }));
 
+  // Use UTC date string for consistent reference line across time zones.
   const todayLabel = new Date().toISOString().split("T")[0];
 
   return (

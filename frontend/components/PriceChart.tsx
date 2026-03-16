@@ -55,7 +55,7 @@ export default function PriceChart({ data, loading }: Props) {
     close: Number(row.close),
   }));
 
-  const interval = formatted.length > 10 ? Math.floor(formatted.length / 10) : 0;
+  const interval = formatted.length > 10 ? Math.floor(formatted.length / 10) : 1;
 
   return (
     <div className="h-80">

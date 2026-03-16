@@ -4,7 +4,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, inspect, select, text
 
 from src.database import get_engine
 from src.ml.forecasting import train_forecast
@@ -23,6 +23,7 @@ app.add_middleware(
 )
 
 forecast_cache: Dict[str, dict] = {}
+# Simple in-memory cache for demo/development; for production use a persistent/shared cache (e.g., Redis) and add TTL.
 
 
 class ForecastRequest(BaseModel):
@@ -43,19 +44,51 @@ def _get_price_table() -> str:
 
 def _load_prices(ticker: str) -> pd.DataFrame:
     table = _get_price_table()
+    inspector = inspect(engine)
+    available_columns = [col["name"] for col in inspector.get_columns(table)]
+    desired_columns = [
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "ma_20",
+        "ma_50",
+        "rsi_14",
+        "macd",
+        "ma_5",
+        "ma_63",
+        "ma_126",
+        "ma_252",
+        "rsi",
+    ]
+    selected_columns = [col for col in desired_columns if col in available_columns]
+    metadata = MetaData()
+    price_table = Table(table, metadata, autoload_with=engine)
+    columns_to_select = [price_table.c[col] for col in selected_columns if col in price_table.c]
+    parse_dates = ["date"] if ("date" in selected_columns or "date" in price_table.c) else None
     with engine.connect() as conn:
-        df = pd.read_sql_query(
-            text(f"SELECT * FROM {table} WHERE ticker = :ticker ORDER BY date ASC"),
-            conn,
-            params={"ticker": ticker},
-            parse_dates=["date"],
-        )
+        stmt = (
+            select(*columns_to_select) if columns_to_select else select(price_table)
+        ).where(price_table.c.ticker == ticker).order_by(price_table.c.date.asc())
+        df = pd.read_sql(stmt, conn, params={"ticker": ticker}, parse_dates=parse_dates)
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No price data for ticker {ticker}")
     # Drop internal id column if present
     if "id" in df.columns:
         df = df.drop(columns=["id"])
     return df
+
+
+def _parse_volume(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -78,7 +111,7 @@ def _ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             data["rsi_14"] = 100 - (100 / (1 + rs))
-    data["rsi_14"] = data["rsi_14"].fillna(method="bfill").fillna(method="ffill")
+    data["rsi_14"] = data["rsi_14"].bfill().ffill()
 
     if "macd" not in data.columns:
         ema_12 = data["close"].ewm(span=12, adjust=False).mean()
@@ -110,7 +143,7 @@ def get_prices(ticker: str, period: int = 90) -> Dict[str, object]:
     period = max(period, 1)
     df = _ensure_indicators(_load_prices(ticker))
     df = df.tail(period)
-    df = df.fillna(method="ffill")
+    df = df.ffill()
     records = df.to_dict(orient="records")
     response = [
         {
@@ -119,9 +152,7 @@ def get_prices(ticker: str, period: int = 90) -> Dict[str, object]:
             "high": float(r["high"]),
             "low": float(r["low"]),
             "close": float(r["close"]),
-            "volume": None
-            if r.get("volume") is None or pd.isna(r.get("volume"))
-            else int(r.get("volume")),
+            "volume": _parse_volume(r.get("volume")),
             "ma_20": float(r["ma_20"]),
             "ma_50": float(r["ma_50"]),
             "rsi_14": float(r["rsi_14"]),

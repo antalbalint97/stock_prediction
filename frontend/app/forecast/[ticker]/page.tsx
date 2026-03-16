@@ -10,7 +10,9 @@ import { ForecastResult, PriceRow } from "@/types/stock";
 
 export default function ForecastPage() {
   const params = useParams<{ ticker: string }>();
-  const ticker = decodeURIComponent(params.ticker);
+  const rawTicker = decodeURIComponent(params.ticker);
+  const ticker = rawTicker.toUpperCase();
+  const tickerIsValid = /^[A-Z0-9._-]{1,10}$/.test(ticker);
 
   const [daysAhead, setDaysAhead] = useState<number>(30);
   const [modelType, setModelType] = useState<string>("linear");
@@ -22,6 +24,11 @@ export default function ForecastPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (!tickerIsValid) {
+        setError("Invalid ticker symbol.");
+        setLoadingPrices(false);
+        return;
+      }
       try {
         const prices = await getPrices(ticker, 180);
         setHistory(prices.data);
@@ -33,10 +40,13 @@ export default function ForecastPage() {
       }
     };
     fetchData();
-  }, [ticker]);
+  }, [ticker, tickerIsValid]);
 
   useEffect(() => {
     const fetchCachedForecast = async () => {
+      if (!tickerIsValid) {
+        return;
+      }
       try {
         const cached = await getForecast(ticker, modelType);
         setForecast(cached);
@@ -45,9 +55,13 @@ export default function ForecastPage() {
       }
     };
     fetchCachedForecast();
-  }, [ticker, modelType]);
+  }, [ticker, modelType, tickerIsValid]);
 
   const handleRun = async () => {
+    if (!tickerIsValid) {
+      setError("Invalid ticker symbol.");
+      return;
+    }
     setLoadingForecast(true);
     setError(null);
     try {

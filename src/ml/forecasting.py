@@ -10,10 +10,13 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, inspect, select
 
 from src.database import get_engine
 
+LSTM_SEQUENCE_LENGTH = 60
+LSTM_EPOCHS = 20
+LSTM_BATCH_SIZE = 32
 
 def _get_price_table(engine) -> str:
     inspector = inspect(engine)
@@ -27,13 +30,34 @@ def _get_price_table(engine) -> str:
 
 def _load_dataframe(engine, ticker: str) -> pd.DataFrame:
     table = _get_price_table(engine)
+    metadata = MetaData()
+    price_table = Table(table, metadata, autoload_with=engine)
+    available_columns = {col.name: col for col in price_table.columns}
+    desired_columns = [
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "ma_20",
+        "ma_50",
+        "rsi_14",
+        "macd",
+        "ma_5",
+        "ma_63",
+        "ma_126",
+        "ma_252",
+        "rsi",
+    ]
+    columns_to_select = [available_columns[col] for col in desired_columns if col in available_columns]
+    stmt = (
+        select(*columns_to_select) if columns_to_select else select(price_table)
+    ).where(price_table.c.ticker == ticker).order_by(price_table.c.date.asc())
+    parse_dates = ["date"] if "date" in price_table.c else None
     with engine.connect() as conn:
-        df = pd.read_sql_query(
-            text(f"SELECT * FROM {table} WHERE ticker = :ticker ORDER BY date ASC"),
-            conn,
-            params={"ticker": ticker},
-            parse_dates=["date"],
-        )
+        df = pd.read_sql(stmt, conn, params={"ticker": ticker}, parse_dates=parse_dates)
     if df.empty:
         raise ValueError(f"No data found for ticker {ticker}")
     if "id" in df.columns:
@@ -59,7 +83,7 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             data["rsi_14"] = 100 - (100 / (1 + rs))
-    data["rsi_14"] = data["rsi_14"].fillna(method="bfill").fillna(method="ffill")
+    data["rsi_14"] = data["rsi_14"].ffill()
     if "macd" not in data.columns:
         ema_12 = data["close"].ewm(span=12, adjust=False).mean()
         ema_26 = data["close"].ewm(span=26, adjust=False).mean()
@@ -69,6 +93,10 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Build feature matrix (X) and target series (y) using a 180-day lookback window.
+    X includes technical indicators and calendar features; y is the next-day close price.
+    """
     df = _add_indicators(df)
     df["target_close"] = df["close"].shift(-1)
     df = df.dropna(subset=["ma_20", "ma_50", "rsi_14", "macd", "target_close"])
@@ -110,10 +138,11 @@ def _train_sklearn_model(
     model.fit(X_train, y_train)
     preds = model.predict(X_test)
     try:
-        r2 = float(r2_score(y_test, preds)) if len(y_test) > 0 else 0.0
+        r2 = float(r2_score(y_test, preds))
+        mae = float(mean_absolute_error(y_test, preds))
     except ValueError:
         r2 = 0.0
-    mae = float(mean_absolute_error(y_test, preds)) if len(y_test) > 0 else 0.0
+        mae = 0.0
 
     last_row = X.iloc[-1]
     future_df = _compute_future_features(last_row, days_ahead)
@@ -134,15 +163,18 @@ def _train_lstm(X: pd.DataFrame, y: pd.Series, days_ahead: int):
 
     scaler = MinMaxScaler()
     scaled_features = scaler.fit_transform(X)
-    seq_len = 60
-    if len(scaled_features) <= seq_len:
-        raise ValueError("Not enough data to train LSTM model (need more than 60 observations).")
+    seq_len = LSTM_SEQUENCE_LENGTH
+    if len(scaled_features) < seq_len:
+        raise ValueError("Not enough data to train LSTM model (need at least 60 observations).")
 
     def create_sequences(features_arr, target_arr, seq_length):
         X_seq, y_seq = [], []
-        for i in range(seq_length, len(features_arr)):
-            X_seq.append(features_arr[i - seq_length : i])
-            y_seq.append(target_arr[i - 1])
+        for i in range(seq_length - 1, len(features_arr)):
+            start = i - (seq_length - 1)
+            X_seq.append(features_arr[start : i + 1])
+            # target_arr already holds the next-day close from preprocessing; target_arr[i] pairs the window
+            # ending at index i with that precomputed next-day value.
+            y_seq.append(target_arr[i])
         return np.array(X_seq), np.array(y_seq)
 
     X_seq, y_seq = create_sequences(scaled_features, y.values, seq_len)
@@ -156,7 +188,7 @@ def _train_lstm(X: pd.DataFrame, y: pd.Series, days_ahead: int):
     model.add(LSTM(32))
     model.add(Dense(1))
     model.compile(optimizer="adam", loss="mse")
-    model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+    model.fit(X_train, y_train, epochs=LSTM_EPOCHS, batch_size=LSTM_BATCH_SIZE, verbose=0)
 
     if len(X_test) > 0:
         test_preds = model.predict(X_test, verbose=0).flatten()
@@ -170,18 +202,28 @@ def _train_lstm(X: pd.DataFrame, y: pd.Series, days_ahead: int):
         mae = 0.0
 
     last_sequence = X_seq[-1]
-    future_forecast = []
+    future_forecast: List[float] = []
     current_seq = last_sequence
-    for _ in range(days_ahead):
-        next_pred = model.predict(current_seq[np.newaxis, ...], verbose=0).flatten()[0]
-        future_forecast.append(next_pred)
-        # Append last known feature vector to maintain shape
-        current_seq = np.vstack([current_seq[1:], current_seq[-1]])
+    current_date = X.index[-1]
+    last_features = X.iloc[-1]
 
-    last_date = X.index[-1]
+    for _ in range(days_ahead):
+        current_date = current_date + timedelta(days=1)
+        next_features = last_features.copy()
+        next_features["day_of_week"] = current_date.dayofweek
+        next_features["day_of_month"] = current_date.day
+        next_features["month"] = current_date.month
+        scaled_next_features = scaler.transform(next_features.to_frame().T)[0]
+        next_input = np.vstack([current_seq[1:], scaled_next_features])
+        next_pred = model.predict(next_input[np.newaxis, ...], verbose=0).flatten()[0]
+        future_forecast.append(next_pred)
+        current_seq = next_input
+
     forecast = []
-    for idx, pred in enumerate(future_forecast, start=1):
-        forecast.append({"date": (last_date + timedelta(days=idx)).strftime("%Y-%m-%d"), "predicted_close": float(pred)})
+    future_date_cursor = X.index[-1]
+    for pred in future_forecast:
+        future_date_cursor = future_date_cursor + timedelta(days=1)
+        forecast.append({"date": future_date_cursor.strftime("%Y-%m-%d"), "predicted_close": float(pred)})
     return {"r2_score": r2, "mae": mae}, forecast
 
 
@@ -228,6 +270,18 @@ def _train_prophet(df: pd.DataFrame, days_ahead: int):
 def train_forecast(ticker: str, days_ahead: int = 30, model_type: str = "linear") -> dict:
     """
     Train a forecasting model for the given ticker and return forecast data and metrics.
+
+    Args:
+        ticker: Stock ticker symbol.
+        days_ahead: Number of future days to predict (default: 30).
+        model_type: One of {"linear", "random_forest", "lstm", "prophet"}.
+
+    Returns:
+        dict with keys: ticker, model_type, forecast (list of date/predicted_close), r2_score, mae.
+
+    Raises:
+        ValueError: If insufficient historical data is available.
+        ImportError: If optional ML dependencies (TensorFlow/Prophet) are missing.
     """
     engine = get_engine()
     raw_df = _load_dataframe(engine, ticker)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Ticker } from "@/types/stock";
 
 type Props = {
@@ -13,12 +13,6 @@ type Props = {
 
 export default function TickerSelector({ tickers, presets, selected, loading, onSelect }: Props) {
   const [input, setInput] = useState<string>(selected ?? "");
-
-  useEffect(() => {
-    // Synchronize the input when the parent selection changes
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setInput(selected ?? "");
-  }, [selected]);
 
   const suggestions = useMemo(() => tickers.map((t) => t.ticker.toUpperCase()), [tickers]);
 
