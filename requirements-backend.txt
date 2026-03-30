@@ -1,0 +1,12 @@
+# Full backend stack (FastAPI + PostgreSQL ETL pipeline)
+# Install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-backend.txt
+
+-r requirements.txt
+sqlalchemy
+psycopg2-binary
+fastapi>=0.110.0,<0.130.0
+uvicorn[standard]>=0.29.0,<0.32.0
+python-dotenv>=1.0.0,<2.0.0
+tensorflow
+prophet>=1.1.5

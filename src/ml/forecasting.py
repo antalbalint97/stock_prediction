@@ -267,6 +267,49 @@ def _train_prophet(df: pd.DataFrame, days_ahead: int):
     return {"r2_score": r2, "mae": mae}, forecast
 
 
+def train_forecast_from_df(df: pd.DataFrame, days_ahead: int = 30, model_type: str = "linear") -> dict:
+    """
+    Train a forecasting model from a pre-loaded DataFrame (no database required).
+
+    Args:
+        df: DataFrame with columns: ticker, date, close (plus any pre-computed indicators).
+        days_ahead: Number of future days to predict (default: 30).
+        model_type: One of {"linear", "random_forest", "lstm", "prophet"}.
+
+    Returns:
+        dict with keys: ticker, model_type, forecast, r2_score, mae.
+    """
+    ticker = str(df["ticker"].iloc[0]) if "ticker" in df.columns else "UNKNOWN"
+    X, y = _prepare_features(df)
+    if len(X) < 30:
+        raise ValueError("Not enough historical data to train a forecasting model.")
+
+    metrics: Dict[str, float]
+    forecast: List[Dict[str, float]]
+
+    if model_type == "linear":
+        model = LinearRegression()
+        metrics, forecast = _train_sklearn_model(model, X, y, days_ahead)
+    elif model_type == "random_forest":
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        metrics, forecast = _train_sklearn_model(model, X, y, days_ahead)
+    elif model_type == "lstm":
+        metrics, forecast = _train_lstm(X, y, days_ahead)
+    elif model_type == "prophet":
+        df_with_indicators = _add_indicators(df.copy()).set_index("date")
+        metrics, forecast = _train_prophet(df_with_indicators, days_ahead)
+    else:
+        raise ValueError("Unsupported model_type. Choose from linear, random_forest, lstm, prophet.")
+
+    return {
+        "ticker": ticker,
+        "model_type": model_type,
+        "forecast": forecast,
+        "r2_score": metrics.get("r2_score", 0.0),
+        "mae": metrics.get("mae", 0.0),
+    }
+
+
 def train_forecast(ticker: str, days_ahead: int = 30, model_type: str = "linear") -> dict:
     """
     Train a forecasting model for the given ticker and return forecast data and metrics.

@@ -1,13 +1,13 @@
+# Core — required for the Streamlit dashboard
 yfinance
 pandas
-sqlalchemy
-psycopg2-binary
 streamlit
 plotly
-numpy>=1.26.4,<2.0.0
-fastapi>=0.110.0,<0.130.0
-uvicorn[standard]>=0.29.0,<0.32.0
+numpy>=2.0.0
 scikit-learn>=1.4.0,<2.0.0
-tensorflow>=2.16.0,<3.0.0
-prophet>=1.1.5,<2.0.0
-python-dotenv>=1.0.0,<2.0.0
+
+# Optional — needed for the LSTM forecast model
+# tensorflow>=2.16.0,<3.0.0
+
+# Optional — needed for the Prophet forecast model
+# prophet>=1.1.5,<2.0.0
